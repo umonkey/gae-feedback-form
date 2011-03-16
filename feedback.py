@@ -1,22 +1,12 @@
 # vim: set fileencoding=utf-8:
 
-u"""Configurable feedback form for Google App Engine.
+u"""A configurable feedback form for Google App Engine.
 
 This script provides you with a feedback form that sends all messages to email.
 Useful when your web site does not have this function (e.g. it's a static web
-site).
+site).  For more details see the README.md file or the web site:
 
-To use this script add it as a handler to your app.yaml, e.g.:
-
-    handlers:
-    - url: /feedback
-      script: feedback.py
-
-To configure the script, go to /feedback?settings (available to admins only).
-
-Written by Justin Forest (hex@umonkey.net) in 2011.
-
-License: BSD.
+https://github.com/umonkey/gae-feedback-form
 """
 
 # Python imports.
