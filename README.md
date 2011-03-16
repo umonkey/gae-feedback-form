@@ -48,13 +48,21 @@ redirected after the message is successfully sent.  Example:
 
     .../feedback?to=info@example.com&back=http://example.com/mail-sent.html
 
+Keep in mind that the page will be displayed inside the iframe, so it must be
+something minimalistic, like a message.
+
 
 
 Known bugs
 ----------
 
+- Messages are sent twice for some reason.
 - reCAPTCHA only works with JavaScript.
 - If you fail to guess captcha, an plain text error message is shown (this can
   be fixed by using AJAX or otherwise).
+- Form fields and messages are not localized.
 
-If you find more bugs, email me at hex@umonkey.net.
+If you find more bugs, email me at hex@umonkey.net.  You can email me with this
+script from my web site at:
+
+http://umonkey.net/feedback.html
