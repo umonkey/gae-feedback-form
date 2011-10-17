@@ -9,48 +9,46 @@ site).  For more details see the README.md file or the web site:
 https://github.com/umonkey/gae-feedback-form
 """
 
-# Python imports.
-import logging
+import cgi
 import urllib
 import wsgiref.handlers
-from xml.sax.saxutils import escape as escape_attr
 
-# GAE imports.
 from google.appengine.api import mail
 from google.appengine.api import urlfetch
 from google.appengine.api import users
-from google.appengine.ext import db
 from google.appengine.ext import webapp
 
-class FeedbackSettings(db.Model):
-    From = db.StringProperty()
-    ValidRecipients = db.StringListProperty()
-    StyleSheet = db.TextProperty()
-    ReCaptchaPublic = db.StringProperty()
-    ReCaptchaPrivate = db.StringProperty()
 
-SETTINGS_HTML = u'''
-<html><head>
+try:
+    from config import RECAPTCHA_PUB, RECAPTCHA_PVT, ADMIN_EMAIL, SENDER_EMAIL
+except ImportError:
+    RECAPTCHA_PUB = RECAPTCHA_PVT = ADMIN_EMAIL = SENDER_EMAIL = None
+
+
+RECAPTCHA_TEMPLATE = u"""<html><head>
 <meta http-equiv="content-type" content="text/html; charset=utf-8"/>
-<title>Feedback Settings</title>
+<title>Spam protection</title>
 <style type="text/css">%(style)s</style>
-</head><body id="settings">
-<h1><a href="%(home)s">Feedback</a> Settings</h1>
+</head><body id="spam">
+<h1>Spam protection</h1>
+<p>Please prove that you're not a robot.</p>
 <form method="post">
-<div><label>From: <input type="text" name="From" value="%(from)s" class="text"/></label></div>
-<div><label>Valid recipients: <input type="text" name="ValidRecipients" value="%(valid)s" class="text"/></label></div>
-<div><label><a href="https://www.google.com/recaptcha/admin/create">reCAPTCHA public key</a>: <input type="text" name="ReCaptchaPublic" value="%(rcpublic)s" class="text"/></label></div>
-<div><label>reCAPTCHA private key: <input type="text" name="ReCaptchaPrivate" value="%(rcprivate)s" class="text"/></label></div>
-<div><label>Custom style sheet:<textarea name="StyleSheet" class="text">%(style_text)s</textarea></label></div>
-<input type="submit" value="Save"/>
+<input type="hidden" name="from" value="%(from)s"/>
+<input type="hidden" name="subject" value="%(subject)s"/>
+<input type="hidden" name="message" value="%(message)s"/>
+<input type="hidden" name="back" value="%(back)s"/>
+<script type="text/javascript" src="http://www.google.com/recaptcha/api/challenge?k=%(recaptcha_pub)s"></script>
+<button>Send the message</button>
 </form>
 </body>
-</html>'''
+</html>
+"""
+
 
 FORM_HTML = u'''
 <html><head>
 <meta http-equiv="content-type" content="text/html; charset=utf-8"/>
-<title>Feedback Settings</title>
+<title>Feedback</title>
 <style type="text/css">%(style)s</style>
 </head><body id="form">
 <form method="post">
@@ -64,128 +62,94 @@ body { margin: 10px; padding: 0; background-color: white; color: black; font: no
 div { margin-bottom: .5em; }
 .text { display: block; width: 400px; }
 textarea { height: 200px; }
-#settings textarea { white-space: nowrap; }
+#spam { width: 318px; margin: 100px auto auto; text-align: center }
 '''
+
 
 class RequestHandler(webapp.RequestHandler):
     def get(self):
-        if 'settings' in self.request.arguments():
-            if not self.check_admin():
-                return
-            settings = self.load_settings()
-            html = SETTINGS_HTML % {
-                'style': settings.StyleSheet or '',
-                'style_text': settings.StyleSheet or '',
-                'home': self.request.path,
-                'from': settings.From or '',
-                'valid': settings.ValidRecipients and u', '.join(settings.ValidRecipients) or '',
-                'rcpublic': settings.ReCaptchaPublic or '',
-                'rcprivate': settings.ReCaptchaPrivate or '',
-            }
-            return self.reply(html)
+        if "sent" in self.request.arguments():
+            self.reply("Your message was sent.", content_type="text/plain")
+            return
 
+        recipient = self.request.get('to')
+        subject = self.request.get('subject')
+        sender = users.get_current_user() and users.get_current_user().email() or ''
+
+        html = u''
+        if 'sent' in self.request.arguments():
+            html += u'<p id="sent">Your message was sent.</p>'
+        html += u'<input type="hidden" name="back" value="%s"/>' % cgi.escape(self.request.get('back') or self.request.url + '?sent')
+        html += u'<div id="sender"><label><span>Your address:</span><input type="text" class="text" name="from" value="%s"/></label></div>' % cgi.escape(sender)
+        if subject:
+            html += u'<input type="hidden" name="subject" value="%s"/>' % cgi.escape(subject)
         else:
-            settings = self.load_settings()
-            recipient = self.request.get('to') or settings.ValidRecipients[0]
-            subject = self.request.get('subject')
-            sender = users.get_current_user() and users.get_current_user().email() or ''
+            html += u'<div id="subject"><label><span>Subject:</span><input class="text" type="text" name="subject"/></label></div>'
+        html += u'<div id="text"><label><span>Text:</span><textarea class="text" name="message"></textarea></label></div>'
+        html += u'<div id="button"><input type="submit" value="Send message"/></div>'
 
-            html = u''
-            if 'sent' in self.request.arguments():
-                html += u'<p id="sent">Your message was sent.</p>'
-            html += u'<input type="hidden" name="back" value="%s"/>' % escape_attr(self.request.get('back') or self.request.url + '?sent')
-            html += u'<div id="sender"><label><span>Your address:</span><input type="text" class="text" name="from" value="%s"/></label></div>' % escape_attr(sender)
-            if subject:
-                html += u'<input type="hidden" name="subject" value="%s"/>' % escape_attr(subject)
-            else:
-                html += u'<div id="subject"><label><span>Subject:</span><input class="text" type="text" name="subject"/></label></div>'
-            html += u'<div id="text"><label><span>Text:</span><textarea class="text" name="message"></textarea></label></div>'
-            html += u'<script type="text/javascript" src="http://www.google.com/recaptcha/api/challenge?k=%s"></script>' % settings.ReCaptchaPublic
-            html += u'<div id="button"><input type="submit" value="Send message"/></div>'
-
-            self.reply(FORM_HTML % {
-                'style': settings.StyleSheet or '',
-                'form_fields': html,
-            })
+        self.reply(FORM_HTML % {
+            'style': DEFAULT_STYLE_SHEET or '',
+            'form_fields': html,
+        })
 
     def post(self):
-        if 'settings' in self.request.arguments():
-            if not self.check_admin():
-                return
-            settings = self.load_settings()
-            for field in settings.fields():
-                value = self.request.get(field)
-                if field == 'ValidRecipients':
-                    value = [x.strip() for x in value.split(',') if x.strip()]
-                setattr(settings, field, value)
-            settings.put()
-            self.redirect(self.request.url)
+        if self.check_recaptcha():
+            return
 
-        elif False: # debug
-            output = dict([(arg, self.request.get(arg)) for arg in self.request.arguments()])
-            self.reply(unicode(output), content_type='text/plain')
+        self.send_message(message=self.request.get("message"),
+            back=self.request.get("back"),
+            sender=self.request.get("from"),
+            subject=self.request.get("subject"))
 
-        else:
-            settings = self.load_settings()
-            if not self.check_captcha(settings):
-                return
-
-            sender = self.request.get('from') or 'anonymous'
-            message = self.request.get('message') or 'no message'
-            back = self.request.get('back') or self.request.path
-
-            subject = self.request.get('subject').strip() or 'no subject'
-            subject_prefix = self.request.get('prefix')
-            if subject_prefix:
-                subject = subject_prefix.strip() + ' ' + subject
-
-            recipient = self.request.get('to')
-            if not recipient or recipient not in settings.ValidRecipients:
-                recipient = settings.ValidRecipients[0]
-
-            text = u'From: %s' % sender
-            text += u'\n' + ('-' * len(text)) + '\n\n' + message
-
-            mail.send_mail(sender=sender, to=recipient, subject=subject, body=text)
-            self.redirect(self.request.get('back'))
-
-    def check_admin(self):
-        """Checks whether the user is an admin.
-        
-        Forces anonymous users to log in, shows an error to non-admins."""
-        if users.get_current_user() is None:
-            self.redirect(users.create_login_url(self.request.url))
+    def check_recaptcha(self):
+        """Uses reCAPTCHA when possible.  Returns True if the request was
+        handled and nothing else should be done.  False means normal processing
+        should continue."""
+        if RECAPTCHA_PVT is None:
             return False
-        if not users.is_current_user_admin():
-            self.reply('<html><body><h1>Access denied</h1><p>Only admins are allowed to use this page.</p></body></html>', status=403)
-            return False
+
+        if "recaptcha_response_field" not in self.request.arguments():
+            form = RECAPTCHA_TEMPLATE % {
+                "from": cgi.escape(self.request.get("from")),
+                "subject": cgi.escape(self.request.get("subject")),
+                "message": cgi.escape(self.request.get("message")),
+                "back": cgi.escape(self.request.get("back")),
+                "style": DEFAULT_STYLE_SHEET,
+                "recaptcha_pub": RECAPTCHA_PUB,
+            }
+            self.reply(form, content_type="text/html")
+            return True
+
+        check = self.fetch("http://www.google.com/recaptcha/api/verify", {
+            "privatekey": RECAPTCHA_PVT,
+            "remoteip": self.request.remote_addr,
+            "challenge": self.request.get("recaptcha_challenge_field"),
+            "response": self.request.get("recaptcha_response_field"),
+        }).split("\n")
+
+        if check[0] == 'true':
+            return False  # False means OK, continue with the real form
+
+        self.reply("Wrong answer.", content_type="text/plain")
         return True
 
-    def check_captcha(self, settings):
-        if not settings.ReCaptchaPublic or not settings.ReCaptchaPrivate:
-            return True
-        check = self.fetch('http://www.google.com/recaptcha/api/verify', {
-            'privatekey': settings.ReCaptchaPrivate,
-            'remoteip': self.request.remote_addr,
-            'challenge': self.request.get('recaptcha_challenge_field'),
-            'response': self.request.get('recaptcha_response_field'),
-        }).split('\n')
-        if check[0] == 'true':
-            return True
-        self.reply('Wrong answer.', content_type='text/plain')
-        return False
+    def send_message(self, message, back, sender, subject):
+        if not sender:
+            sender = "anonymous"
+        if not subject:
+            subject = "no subject"
+
+        text = u'From: %s (%s)' % (sender, self.request.remote_addr)
+        text += u'\n' + ('-' * len(text)) + '\n\n' + message
+
+        mail.send_mail(sender=SENDER_EMAIL, to=ADMIN_EMAIL, subject=subject, body=text)
+        self.redirect(self.request.get("back"))
 
     def reply(self, text, status=200, content_type='text/html'):
         self.response.set_status(status)
         self.response.headers['Content-Type'] = content_type + '; charset=utf-8'
         self.response.out.write(text.encode('utf-8'))
-
-    def load_settings(self):
-        settings = FeedbackSettings.all().get()
-        if settings is None:
-            settings = FeedbackSettings(StyleSheet=DEFAULT_STYLE_SHEET,
-                ValidRecipients=['info@example.com'])
-        return settings
 
     def fetch(self, url, payload=None):
         method = urlfetch.GET
@@ -194,6 +158,7 @@ class RequestHandler(webapp.RequestHandler):
             payload = urllib.urlencode(payload)
         result = urlfetch.fetch(url, payload=payload, method=method)
         return result.content
+
 
 if __name__ == '__main__':
     wsgiref.handlers.CGIHandler().run(webapp.WSGIApplication([
